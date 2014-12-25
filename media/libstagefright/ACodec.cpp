@@ -488,11 +488,15 @@ status_t ACodec::allocateBuffersOnPort(OMX_U32 portIndex) {
 
     status_t err;
     if (mNativeWindow != NULL && portIndex == kPortIndexOutput) {
+#ifdef STE_HARDWARE
+	err = allocateOutputBuffersFromNativeWindow();
+#else
         if (mStoreMetaDataInOutputBuffers) {
             err = allocateOutputMetaDataBuffers();
         } else {
             err = allocateOutputBuffersFromNativeWindow();
         }
+#endif
     } else {
         OMX_PARAM_PORTDEFINITIONTYPE def;
         InitOMXParams(&def);
@@ -602,7 +606,11 @@ status_t ACodec::configureOutputBuffersFromNativeWindow(
             mNativeWindow.get(),
             def.format.video.nFrameWidth,
             def.format.video.nFrameHeight,
+#ifdef STE_HARDWARE
+	    OMXCodec::OmxToHALFormat(def.format.video.eColorFormat));
+#else
             def.format.video.eColorFormat);
+#endif
 #endif
 
     if (err != 0) {
@@ -1013,6 +1021,8 @@ status_t ACodec::setComponentRole(
 #endif
         { MEDIA_MIMETYPE_AUDIO_AAC,
             "audio_decoder.aac", "audio_encoder.aac" },
+        { MEDIA_MIMETYPE_AUDIO_AAC_ELD,
+            "audio_decoder.aeld", "audio_encoder.aeld" },
         { MEDIA_MIMETYPE_AUDIO_VORBIS,
             "audio_decoder.vorbis", "audio_encoder.vorbis" },
         { MEDIA_MIMETYPE_AUDIO_G711_MLAW,
@@ -1096,6 +1106,15 @@ status_t ACodec::configureCodec(
     }
 
     mIsEncoder = encoder;
+   /* Meticulus:
+    * Software codecs don't require configuration? Not sure
+    * but skipping configuration for them seems to work.
+    */
+    if(strncmp("OMX.google.h264", mComponentName.c_str(), 15) == 0
+       || strncmp("OMX.ffmpeg.h264", mComponentName.c_str(), 15) == 0){
+	ALOGI("Meticulus: Soft codec %s detected, skipping configureCodec\n", mComponentName.c_str());
+       return OK;
+    }
 
     status_t err = setComponentRole(encoder /* isEncoder */, mime);
 
@@ -1302,7 +1321,8 @@ status_t ACodec::configureCodec(
                     sampleRate,
                     numChannels);
         }
-    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC)) {
+    } else if (!strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC)
+           || !strcasecmp(mime, MEDIA_MIMETYPE_AUDIO_AAC_ELD)) {
         int32_t numChannels, sampleRate;
         if (!msg->findInt32("channel-count", &numChannels)
                 || !msg->findInt32("sample-rate", &sampleRate)) {
@@ -1411,6 +1431,12 @@ status_t ACodec::configureCodec(
         err = setMinBufferSize(kPortIndexInput, (size_t)maxInputSize);
     } else if (!strcmp("OMX.Nvidia.aac.decoder", mComponentName.c_str())) {
         err = setMinBufferSize(kPortIndexInput, 8192);  // XXX
+    } else if (!strncasecmp(mime, "video/", 6)) {
+        int32_t width, height;
+        CHECK(msg->findInt32("width", &width));
+        CHECK(msg->findInt32("height", &height));
+
+        err = setMinBufferSize(kPortIndexInput, (size_t)(width * height));
     }
 
     return err;
